@@ -1,14 +1,23 @@
 # Import dependencies
 from typing import List, Dict
 from encord import EncordUserClient
-from encord.objects import LabelRowV2, Object, ObjectInstance, OntologyStructure
+from encord.objects import Object, Option
 from encord.objects.coordinates import BoundingBoxCoordinates
+from encord.objects.attributes import RadioAttribute
 import json
 
-def read_export_file(filepath: str) -> dict:
-    """Read and parse the export.json file"""
+def read_export_file(filepath: str) -> tuple[dict, dict]:
+    """Read and parse the export.json file and return annotations and metadata"""
     with open(filepath, 'r') as f:
-        return json.load(f)
+        data = json.load(f)
+        # Create a lookup dictionary that stores lists of metadata entries
+        metadata_lookup = {}
+        for item in data["annotation_metadata"]:
+            annotation_id = item["annotation_id"]
+            if annotation_id not in metadata_lookup:
+                metadata_lookup[annotation_id] = []
+            metadata_lookup[annotation_id].append(item)
+        return data, metadata_lookup
 
 def get_video_dimensions(video_meta: List[dict], file_id: str) -> tuple[int, int]:
     """Get width and height for a specific video file"""
@@ -47,7 +56,7 @@ def main():
     label_rows = project.list_label_rows_v2()
     
     # Read export data
-    export_data = read_export_file("export.json")
+    export_data, metadata_lookup = read_export_file("export.json")
     video_meta = export_data["video_meta"]
     annotations = export_data["annotations"]
     
@@ -93,15 +102,44 @@ def main():
             title="Person", type_=Object
         )
         
+        # Get the attribute objects from ontology
+        walking_speed_attr = ontology_structure.get_child_by_title(
+            title="Walking Speed", type_=RadioAttribute
+        )
+        shoes_attr = ontology_structure.get_child_by_title(
+            title="Shoes", type_=RadioAttribute
+        )
+        clothing_attr = ontology_structure.get_child_by_title(
+            title="Clothing", type_=RadioAttribute
+        )
+        
         # Create and add object instances for this file
         for annotation_id, frames_coords in instances.items():
             object_instance = person_object.create_instance()
             
+            # Add coordinates for each frame
             for frame_number, coordinates in frames_coords.items():
                 object_instance.set_for_frames(
                     coordinates=coordinates,
                     frames=frame_number
                 )
+            
+            # Add metadata if it exists for this annotation_id
+            if annotation_id in metadata_lookup:
+                for metadata in metadata_lookup[annotation_id]:
+                    # Set the appropriate attribute based on the question
+                    if metadata["question"] == "Walking Speed":
+                        object_instance.set_answer(
+                            answer=walking_speed_attr.get_child_by_title(metadata["answer"], type_=Option)
+                        )
+                    elif metadata["question"] == "Shoes":
+                        object_instance.set_answer(
+                            answer=shoes_attr.get_child_by_title(metadata["answer"], type_=Option)
+                        )
+                    elif metadata["question"] == "Clothing":
+                        object_instance.set_answer(
+                            answer=clothing_attr.get_child_by_title(metadata["answer"], type_=Option)
+                        )
             
             label_row.add_object_instance(object_instance)
         
